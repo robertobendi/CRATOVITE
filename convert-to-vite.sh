@@ -86,10 +86,6 @@ update_package_json() {
       pkg.scripts.start = "vite";
     }
     
-    // Add browserslist support
-    if (!pkg.devDependencies) pkg.devDependencies = {};
-    pkg.devDependencies["browserslist-to-esbuild"] = "latest";
-    
     // Write updated package.json
     fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
   '
@@ -112,7 +108,7 @@ update_dependencies() {
   
   # Install Vite and necessary plugins
   log_info "Installing Vite and plugins..."
-  npm install --save-dev vite @vitejs/plugin-react browserslist-to-esbuild vite-plugin-svgr
+  npm install --save-dev vite @vitejs/plugin-react
   
   log_success "Dependencies updated successfully."
 }
@@ -123,31 +119,43 @@ create_vite_config() {
   
   # Create vite.config.js with appropriate configuration
   cat > vite.config.js << EOL
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import svgr from 'vite-plugin-svgr';
-import { browserslistToEsbuild } from 'browserslist-to-esbuild';
+const { defineConfig } = require('vite');
+const react = require('@vitejs/plugin-react');
+const path = require('path');
 
-// https://vitejs.dev/config/
-export default defineConfig({
+module.exports = defineConfig({
   plugins: [
-    react(),
-    svgr() // Allows importing SVGs as React components
+    react()
   ],
   build: {
     outDir: 'build', // Match CRA's build directory
-    target: browserslistToEsbuild(), // Use browserslist config for compatibility
+    // Use specific targets instead of browserslist-to-esbuild
+    target: ['es2015', 'edge88', 'firefox78', 'chrome87', 'safari13'],
   },
   server: {
     port: 3000, // Match CRA's default port
     open: true,
   },
   resolve: {
+    extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'], // Explicitly include JSX extensions
     alias: {
       // Add any aliases you might have in jsconfig/tsconfig
-      // '@': '/src',
+      // '@': path.resolve(__dirname, 'src'),
     }
   },
+  // Handle JSX in .js files
+  esbuild: {
+    loader: 'jsx',
+    include: /src\/.*\.jsx?$/,
+    exclude: []
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      loader: {
+        '.js': 'jsx' // This tells esbuild to treat .js files as .jsx
+      }
+    }
+  }
 });
 EOL
   
@@ -239,8 +247,9 @@ migrate_index_html() {
   if [ -f src/index.tsx ]; then
     sed -i.bak 's/index.jsx/index.tsx/g' index.html
   elif [ -f src/index.js ] && [ ! -f src/index.jsx ]; then
-    # If only .js exists (not .jsx), we'll keep the reference as .js
-    sed -i.bak 's/index.jsx/index.js/g' index.html
+    # If only .js exists (not .jsx), rename it to .jsx
+    log_info "Renaming src/index.js to src/index.jsx for JSX support..."
+    mv src/index.js src/index.jsx
   fi
   
   # Cleanup backup files
@@ -257,9 +266,20 @@ update_source_files() {
   log_info "Updating environment variables in source files..."
   find src -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" \) -exec sed -i.bak 's/process\.env\.REACT_APP_/import.meta.env.VITE_/g' {} \;
   
-  # Handle SVG imports for SVGR compatibility
+  # Rename JS files with JSX content to .jsx
+  log_info "Checking for JS files with JSX content..."
+  for file in $(find src -name "*.js"); do
+    # Check if file contains JSX syntax
+    if grep -q "<\w[^>]*>" "$file" || grep -q "React\.createElement" "$file"; then
+      new_file="${file%.js}.jsx"
+      log_info "Renaming $file to $new_file (contains JSX)"
+      mv "$file" "$new_file"
+    fi
+  done
+  
+  # Handle SVG imports - instead of using the SVGR plugin, update imports directly
   log_info "Updating SVG imports for Vite compatibility..."
-  find src -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" \) -exec sed -i.bak 's/import\s\+\([A-Za-z0-9]\+\)\s\+from\s\+"\([^"]\+\.svg\)"/import \1 from "\2?react"/g' {} \;
+  find src -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" \) -exec sed -i.bak 's/import { ReactComponent as \([A-Za-z0-9]\+\) } from "\([^"]\+\.svg\)"/import \1 from "\2?url"/' {} \;
   
   # Remove backup files
   find src -name "*.bak" -delete
@@ -287,6 +307,42 @@ update_source_files() {
   log_success "Source files updated successfully."
 }
 
+# Add SVG handling helper
+create_svg_helper() {
+  log_info "Creating SVG helper file to replace SVGR functionality..."
+  
+  mkdir -p src/utils
+  cat > src/utils/svgr.jsx << EOL
+import React from 'react';
+
+/**
+ * A simple helper to convert an imported SVG URL to a React component
+ * This helps maintain compatibility with the ReactComponent import syntax from CRA
+ * 
+ * @param {string} url - The URL of the SVG (imported with ?url)
+ * @param {Object} props - Props to pass to the img element
+ * @returns {React.ReactElement} - An img element with the SVG as its src
+ */
+export const createSvgComponent = (url, props = {}) => {
+  return <img src={url} alt={props.alt || ''} {...props} />;
+};
+
+/**
+ * Usage:
+ * 
+ * // Instead of:
+ * // import { ReactComponent as Logo } from './logo.svg'
+ * 
+ * // Do this:
+ * import logoUrl from './logo.svg?url'
+ * import { createSvgComponent } from './utils/svgr'
+ * const Logo = (props) => createSvgComponent(logoUrl, props)
+ */
+EOL
+
+  log_success "SVG helper file created successfully."
+}
+
 # Final cleanup and instructions
 final_cleanup() {
   log_info "Performing final cleanup..."
@@ -311,17 +367,47 @@ This project has been migrated from Create React App to Vite.
 - All environment variables have been renamed from \`REACT_APP_*\` to \`VITE_*\`
 - In your code, replace \`process.env.REACT_APP_*\` with \`import.meta.env.VITE_*\`
 
-## Major Changes
+## SVG Support
 
-- The entry point is now \`/index.html\` in the project root (moved from \`public/\`)
-- Static assets remain in the \`public/\` directory
-- SVG imports now use \`?react\` suffix for component usage
+- The SVGR plugin is not used in this migration due to compatibility issues
+- For SVG files that were previously imported as React components:
+  - Replace: \`import { ReactComponent as Logo } from './logo.svg'\`
+  - With: 
+    ```js
+    import logoUrl from './logo.svg?url'
+    import { createSvgComponent } from './utils/svgr'
+    const Logo = (props) => createSvgComponent(logoUrl, props)
+    ```
+- If you need full SVGR functionality later, you can install it manually:
+  \`npm install vite-plugin-svgr --save-dev\`
+  And then update your vite.config.js to include it properly
+
+## File Extensions
+
+- JS files containing JSX have been renamed to .jsx
+- This is required for Vite to properly process JSX content
 
 ## TypeScript Changes
 
 If you're using TypeScript:
 - Types for environment variables are in \`src/types/environment.d.ts\`
 - Updated \`tsconfig.json\` with Vite-specific settings
+
+## Common Issues and Solutions
+
+### JSX Processing
+If you encounter JSX processing errors:
+- Make sure files with JSX syntax use the .jsx extension
+- If you add new files with JSX, use the .jsx extension
+
+### SVG Imports
+If you have issues with SVG imports:
+- Use the provided helper in src/utils/svgr.jsx
+- Or import SVGs directly as URLs with \`import logoUrl from './logo.svg?url'\`
+
+### Environment Variables
+- Remember that all environment variables must be prefixed with VITE_ now
+- They are accessed via import.meta.env.VITE_* instead of process.env.REACT_APP_*
 
 For more information, see the [Vite documentation](https://vitejs.dev/guide/).
 EOL
@@ -356,6 +442,7 @@ main() {
   create_vite_config
   migrate_index_html
   update_source_files
+  create_svg_helper
   final_cleanup
   
   echo ""
