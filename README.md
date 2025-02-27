@@ -7,7 +7,7 @@
 ![React](https://img.shields.io/badge/React-Friendly-blue?style=for-the-badge&logo=react)
 
 **Supercharge your React app by migrating from Create React App to Vite in seconds!**
-
+by Roberto Bendinelli
 </div>
 
 ## ✨ Why Vite?
@@ -98,7 +98,7 @@ That's it! The script handles everything else.
 
 ## 📜 License
 
-MIT
+GNU
 
 ---
 
