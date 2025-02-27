@@ -25,6 +25,30 @@ log_error() {
   exit 1
 }
 
+# Check Node.js version
+check_node_version() {
+  node_version=$(node -v | cut -d 'v' -f 2)
+  major_version=$(echo $node_version | cut -d '.' -f 1)
+  
+  log_info "Detected Node.js version: $node_version"
+  
+  if [ $major_version -lt 18 ]; then
+    log_warning "Vite 5.x requires Node.js version 18 or higher."
+    log_warning "You are currently using Node.js $node_version"
+    echo ""
+    log_info "You have two options:"
+    log_info "1. Update your Node.js version to 18 or higher (recommended)"
+    log_info "2. Install an older version of Vite compatible with your Node.js version"
+    echo ""
+    read -p "Do you want to continue anyway? (y/n): " node_confirm
+    
+    if [[ $node_confirm != "y" && $node_confirm != "Y" ]]; then
+      log_info "Migration cancelled. Please update your Node.js version and try again."
+      exit 0
+    fi
+  fi
+}
+
 # Check if the current directory is a React app
 check_react_app() {
   if [ ! -f package.json ]; then
@@ -315,6 +339,7 @@ main() {
   echo -e "${BLUE}====================================${NC}"
   echo ""
   
+  check_node_version
   check_react_app
   
   echo ""
